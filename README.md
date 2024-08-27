@@ -9,6 +9,8 @@ This repo contains the documentation for a homelab project in which I:
 - installed Suricata to proactively monitor and protect the devices on the network
 - created an Ansible playbook to automate basic setup for future machines
 
+The goal of this documentation is to catalogue the process of setting up the lab in case I (or anyone else!) wanted to set up similar environment.
+
 
 <h2>Hypervisor Choice, Installation, Configuration</h2>
 
@@ -58,6 +60,20 @@ I designated the shared folder, the client machine IP, and the permissions as fo
 <h3>Configuring the NFS Client</h3>
 
 Over on the client machine (running Rocky Linux), the first step is to download the nfs utilities package by using the command **sudo dnf install nfs-utils**.Once the install was complete, it was time to create a folder to act as the local share location. I created a folder in my desired location with default permissions using the command **sudo mkdir -p /nfs/zstorage**. I then checked to see if the command worked using **df -h** (which reports file system disk space, using the “human-readable” -h flag). Lastly, I tested NFS access by created a file in the share from the client machine (**sudo touch /nfs/zstorage/client-test.txt**).
+
+<h2>Docker + Nginx Installation and Setup</h2>
+
+With Docker installed, hosting container-based services is made relatively simple. Using nginx to host a static webpage is just one small example of what is possible with just Docker and a little bit of know-how!
+
+Docker can be installed the same way as most other software packages on Ubuntu: **sudo apt-get install docker.io**. You can verify the download worked by checking the installed Docker version using **docker --version**.
+
+Next, I want to allow my non-root profiles to manage Docker. This is accomplished by adding the account(s) to the Docker group: **sudo usermod -aG docker username**. Once added to the group, the user will be able to manage Docker without root privileges next time they log in.
+
+Now that the appropriate permissions are set, we can import an nginx image directly from Docker by using the command **docker pull nginx**. This command automatically pulls down the latest official Docker-supported image onto the machine. We can verify that the download was successful by calling **docker images** to list all of the currently installed images on the machine, where an entry called "nginx" should now be present.
+
+Equipped with the newly-installed nginx image, we can set up a container to serve the image using the command **docker run –name my-nginx -p 8080:80 -d nginx**. This command will spin up a docker container called “my-nginx” using the nginx image from Docker. The -p flag lets us bind ports from the container to our host machine (in this case port 80 on the container to port 8080 on the host). Lastly, the -d flag lets us start the container in detached (“background”) mode. Because we started the container in detached mode, the only response we will get on the terminal is a long string of characters (this is the ID of the container you just made!). We can use the command **docker ps** to list all of the currently running containers. You should see your “my-nginx” container here.
+
+Finally, let's access the container from a browser to confirm it is running the way we expect it to. Navigate to http//localhost:8080 in a web browser on the host machine. If successful, you will see the default "Welcome to nginx" page.
 
 
 
