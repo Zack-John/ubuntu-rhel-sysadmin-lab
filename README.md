@@ -6,10 +6,9 @@ This repo contains the documentation for a homelab project in which I:
 - installed and configured ssh in order to remotely access the Rocky machine from my Ubuntu machine
 - installed and configured zfs and nfs to improve functionality on both machines' file systems (one machine with zfs installed and one machine accessing the file system via nfs)
 - employed Docker and nginx to host a webpage
-- installed Suricata to proactively monitor and protect the devices on the network
 - created an Ansible playbook to automate basic setup for future machines
 
-The goal of this documentation is to catalogue the process of setting up the lab in case I (or anyone else!) wanted to set up similar environment.
+The goal of this documentation is to catalogue the process of setting up a simple lab (with a few more considerations given to security than I typically see in write-ups like this) in case myself or anyone else wanted to quickly set up a similar environment. Because the actual uses for applications like Docker and Ansible will vary greatly from person to person, this document simply provides a "scaffolding" for setting up the lab environment.
 
 
 <h2>Hypervisor Choice, Installation, Configuration</h2>
@@ -44,11 +43,13 @@ The next task is to improve the machine by replacing the standard filesystem wit
 
 To add ZFS functionality to the Ubuntu machine, I began by creating 4 virtual drives and installing the ZFS utilities by running the command **sudo apt install zfsutils-linux**. Once my machine was equipped with the ZFS utilities, I verified that my virtual drives were recognized by the OS by running **sudo fdisk -l**. I then created the pool by using the zpool create command: **sudo zpool create zstorage mirror /dev/sdb /dev/sdc mirror /dev/sdd /dev/sde**. This command results in two vdevs, each with two mirrored disks, in the zpool (named zstorage) with **sudo zfs mount zstorage** (and once again used **sudo zfs mount** to make sure the filesystem mounted successfully).
 
-<h2>NFS Setup and Configuration</h2>
+<h2>NFS Configuraion</h2>
 
 Next, I wanted to allow the other machines on the network to take advantage of ZFS by turning the Unbuntu machine into an NFS server.
 
+
 <h3>Configuring the NFS Server</h3>
+
 The first step in setting up my Ubuntu machine as an NFS server was to install the required components using the command **sudo apt install nfs-kernel-server**. Once done, launch the NFS server using the command **sudo systemctl start nfs-kernel-server.service**.
 
 With the server package installed and the service running, we can move on to creating the shared folder for use with NFS. I used the command **sudo mkdir /var/nfs/zstorage -p** to create the shared folder in the /var/ directory with default permissions. Because the file system belongs to the host machine, root operations on the client machine will default to nobody:nogroup credentials as a default security measure. As a result, we need to change the directory ownership to match: **sudo chown nobody:nogroup /var/nfs/zstorage**.
@@ -56,6 +57,7 @@ With the server package installed and the service running, we can move on to cre
 With the credentials changed, I can now move into the NFS configuration files to configure sharing rules. Open the config files (/etc/exports *) using nano and configure the pool with a single-line entry: **/var/nfs/zstorage dest.ip.add.ress(rw,sync,no_subtree_check)**.
 
 I designated the shared folder, the client machine IP, and the permissions as follows: _rw_ allows the client machine to read and write to the volume, _sync_ forces NFS to write changes to disk before replying to client requests, and _no_subtree_check_ turns off the subtree checking on the host machine. Subtree checking is when the host machine checks if the requested file is still available in the export tree for each request from the client. Disabling it was suggested to me because it can cause issues when a file is renamed while the client has that file opened. Once these rules are in place, I restarted the NFS server using **sudo systemctl restart nfs-kernel-server**. The system should now be ready to start sharing files via NFS!
+
 
 <h3>Configuring the NFS Client</h3>
 
@@ -73,7 +75,106 @@ Now that the appropriate permissions are set, we can import an nginx image direc
 
 Equipped with the newly-installed nginx image, we can set up a container to serve the image using the command **docker run –name my-nginx -p 8080:80 -d nginx**. This command will spin up a docker container called “my-nginx” using the nginx image from Docker. The -p flag lets us bind ports from the container to our host machine (in this case port 80 on the container to port 8080 on the host). Lastly, the -d flag lets us start the container in detached (“background”) mode. Because we started the container in detached mode, the only response we will get on the terminal is a long string of characters (this is the ID of the container you just made!). We can use the command **docker ps** to list all of the currently running containers. You should see your “my-nginx” container here.
 
-Finally, let's access the container from a browser to confirm it is running the way we expect it to. Navigate to http//localhost:8080 in a web browser on the host machine. If successful, you will see the default "Welcome to nginx" page.
+Finally, let's access the container from a browser to confirm it is running the way we expect it to. Navigate to http//localhost:8080 in a web browser on the host machine. If successful, you will see the default "Welcome to nginx" page!
 
 
+<h2>Bonus: System Setup Automation with Ansible</h2>
+
+Setting up new machines can be an interesting and enjoyable process (if you're a nerd like me!), but setting up a fleet of machines like you might in an enterprise environment is simply too time intensive for most organizations. To solve this problem, there are a number of powerful automation tools available that make system setup and maintenance a breeze. Ansible is one of those tools. It strikes a good balance of being user-friendly while offering a robust set of tools, giving administrators the ability to spin up large, dynamic systems with just a few lines in a yaml file called "playbooks". Ansible playbooks are made up of individual tasks or "plays" that will be executed automatically upon running the playbook. I'm going to automate a few of the setup tasks I typically do manually when setting up environments similar to the one described in this document.
+
+<h3>Creating a Sudo User</h3>
+
+We always like to keep use of the root account to an absolute minimum for both convenience and security purposes. So naturally, the first thing we will need to do with a fresh machine is to create a new sudo user account. On your control machine, create a new ansible playbook file using your preferred editor (I use nano): **nano playbook.yml**. Inside that file, start by adding some configuration info:
+
+```
+- hosts: all
+  become: true
+  vars:
+    admin_username: admin
+```
+
+The “hosts” category tells Ansible which machines to execute the playbook on, “become” says whether or not commands should be done with root privileges, and “vars” allows us to create variables for any pertinent data for our commands in this playbook. Right now we’re creating a variable called ‘admin_username’ that stores the string ‘admin’.
+
+As mentioned earlier, our interest in using sudo is not only a method to improve security, but also an attempt at improving workflow and convenience. Instead of having to log out of your regular user account and into the root account repeatedly, we can make use of the sudo command. To further decrease the friction of issuing privileged commands, we are setting our rules to not require a password every time sudo is called. This can be accomplished with a simple change in the sudo file. Let's write a task to disable sudo passwords inside our playbook:
+
+```
+- name: setup sudo user (no password)
+  lineinfile:
+    path: /etc/sudoers
+    state: present
+    regexp: '^%sudo'
+    line: '%sudo ALL=(ALL) NOPASSWD: ALL'
+    validate: '/usr/sbin/visudo -cf %s'
+```
+
+In the above snippet, we are using the lineinfile function provided by Ansible to replace a line (targeted using the regex statement ‘^%sudo’) inside the file located at ‘/etc/sudoers’. The line in the file is replaced with the string stored in ‘line’ inside our play above. As suggested by Ansible, we then use ‘visudo’ to validate our changes to hopefully prevent any issues. Now that that is taken care of, we can write the task to actually add a new sudo user:
+
+```
+- name: create a new user ‘admin’ with sudo privileges
+  user:
+    name: "{{ admin_username }}"
+    state: present
+    groups: sudo
+    append: true
+    create_home: true
+```
+
+This task checks if we have a sudo user account with name specified in the variable at the top of the file, and if not, creates one (along with a home directory for the new user). If you were to run this playbook as it stands currently, it would disable the sudo password requirement and create a new user named ‘admin’ with sudo privileges automatically. Pretty cool! 
+
+Next, let's continue to improve our security posture and convenience by automating SSH key generation, adding the keys to our authorized_keys file, and disabling root password authentication.
+
+<h3>SSH Setup and Root Authentication</h3>
+
+We’ll start by automating the distribution of the SSH key to the machine. This is doubly advantageous to us as Ansible users, as Ansible assumes that you are using ssh keys for authentication. Typically, you would need to manually generate and move ssh keys around using your terminal, but fortunately for us, Ansible makes this very convenient with its built-in ‘authorized_key’ function:
+
+```
+- name: create / set authorized key for remote user
+  ansible.posix.authorized_key:
+    user: "{{ admin_username }}"
+    state: present
+    key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_rsa.pub') }}"
+```
+
+We simply provide the ansible.posix.authorized_key module with the variable storing the name of our new account, and tell it to check if any keys are present in the ssh key file. If not, it generates them to fulfill this requirement. As you can tell from the key line above, we use another built-in Ansible function called ‘lookup’ to build out the path to the user’s key. Now that we are performing authentication using SSH keys, lets disable the root password:
+
+```
+- name: disable root password authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    state: present
+    regexp: '^#?PermitRootLogin'
+    line: 'PermitRootLogin prohibit-password'
+```
+
+We once again make use of Ansible’s ‘lineinfile’ function to identify a line using regular expressions, and then replace the specified line with a new string defined inside this task. This time, we’re targeting a line inside of ‘/etc/ssh/sshd_config’ that removes access to root privileges by password, making it so that only SSH key authentication will work.
+
+<h3>Updating, Patching, and Preparing the Machine</h3>
+
+Now that we’re automatically creating a new sudo account and configuring it’s ssh key, we are at the point in the setup process where we’d typically remotely login to the machine and start issuing typical setup commands, namely using apt/apt-get to update and upgrade our system, and installing any desired software. This step will vary for everyone, as it will need to include whichever non-default software packages you need for your machine’s purpose. For demonstration purposes, I’ll write a simple task that will start by updating all packages to their latest version, and then specifically download or update a few common system packages used by developers:
+
+```
+- name: update all ubuntu packages
+  ansible.builtin.apt:
+    name: "*"
+    state: latest
+
+- name: Update apt and install required system packages
+  apt:
+    pkg:
+      - git
+      - nano
+      - curl
+    state: latest
+    update_cache: true
+```
+
+As the name implies, the first task in this section simply asks Ansible to update all of our default Ubuntu packages to their latest version via ‘apt’. This is immensely useful and should typically be done on the first launch of any new machine. The second task asks Ansible to download/update and verify the specific packages listed (git, curl, and nano).
+
+<h3>Running the Playbook</h3>
+
+The playbook now has the ability to create a new user, give them sudo permissions (e.g., add them to the sudoers file), disables the password requirement for sudo calls, generates and sets ssh keys for the new user, disables root password authentication, and installs any other packages or applications that we may want installed on a fresh machine – all with just a few lines in the playbook! With just this file, we can command Ansible to automatically execute this setup process on an arbitrary number of similar machines. Now all that is left is to run our playbook for the first time!
+
+First, we’ll need to add our server hostname or IP address to our Ansible hosts file (‘/etc/ansible/hosts’). Under the [server] header, I added a line that reads: “server1 ansible_host: 10.0.2.15”, which is, as you would expect, the IP address of my Ansible server machine. Once that's done, we can run the playbook!
+
+Assuming this is the first time running this playbook, we’ll need to execute the playbook as ‘root’ with the flag ‘-k’ (which allows us to enter the SSH password for our root user, since the remote server will not be setup yet): **ansible-playbook playbook.yml -l server1 -u root -k**. Once the initial call has been made to the playbook, any subsequent calls can be made using the admin account we created: **ansible-playbook playbook.yml -l server1 -u admin**.
 
