@@ -17,7 +17,7 @@ For this project, I decided on VirtualBox for my hypervisor. This choice was mad
 
 The VirtualBox installation process is very straightforward. After downloading the installer (and verifying the checksum!) the launcher walks the user through the installation process. The only default feature I chose to forego was the Python support, as I don’t intend to manipulate the hypervisor or the VMs with Python. Once you’ve confirmed your feature choices, the program is installed and ready for use.
 
-Beyond the initial setup, I created an internal network so that case I can have multiple virtual machines communicate between one-another locally.
+Beyond the initial setup, I created an internal network so that I can have multiple virtual machines communicate between one-another locally.
 
 <h2>OS Choice, Installation, Configuration</h2>
 
